@@ -1,0 +1,14 @@
+{
+  "id": "/bar-skt/",
+  "name": "Bar SKT Takip",
+  "short_name": "Bar SKT",
+  "start_url": "/bar-skt/",
+  "scope": "/bar-skt/",
+  "display": "standalone",
+  "background_color": "#1c1b1a",
+  "theme_color": "#1c1b1a",
+  "icons": [
+    {"src": "icon-192-3.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "icon-512-3.png", "sizes": "512x512", "type": "image/png", "purpose": "any"}
+  ]
+}
