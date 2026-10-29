@@ -41,6 +41,8 @@ details summary{cursor:pointer;font-weight:600}
 .item.none{border-left-color:var(--mute)}.none .tag{color:var(--mute)}
 input.inl{width:auto;padding:4px 6px;font-size:13px;margin-top:4px}
 .sum small{font-size:12px}#bc{font-size:13px;color:var(--mute)}
+#toast{position:fixed;left:12px;right:12px;bottom:max(14px,env(safe-area-inset-bottom));background:var(--acc);color:var(--accT);padding:12px 14px;border-radius:12px;z-index:20;display:none;font-size:14px;align-items:center;gap:10px;justify-content:space-between;box-shadow:0 4px 16px rgba(0,0,0,.4)}
+#toast button{width:auto;padding:6px 10px;font-size:13px;white-space:nowrap}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -98,6 +100,8 @@ input.inl{width:auto;padding:4px 6px;font-size:13px;margin-top:4px}
 <div id="list"></div>
 </div>
 
+<div id="toast"></div>
+<input type="file" id="itemPhotoIn" accept="image/*" capture="environment" style="display:none">
 <div id="scan"><b>Barkodu kameraya tutun</b><div id="reader"></div><button id="scanX">Kapat</button></div>
 
 <script type="module">
@@ -120,7 +124,7 @@ const $=id=>document.getElementById(id);
 const fb=initializeApp(FIREBASE_CONFIG),auth=getAuth(fb),db=getFirestore(fb),ai=getAI(fb,{backend:new GoogleAIBackend()});
 const DEFAULT_GROUPS=['Bira','Şarap','Rakı','Sert İçki','Likör & Vermut','Easymix','Şurup','Püre','Çay & Kahve','Alkolsüz İçecek','Süt/Krema','Meyve/Sebze','Açılmış şişe','Fıçı bira','Diğer'];
 const DOMAIN='@bar-skt.app';let isAdmin=false,staffName='',staffList=[];
-let photoMatch=null;
+let photoMatch=null,targetItem=null,toastT=null;
 let items=[],groups=[],logs=[],me=null,editId=null,barcode='',unsubs=[],scanner=null;
 const DAY=864e5,today=()=>{const d=new Date();d.setHours(0,0,0,0);return d};
 const pd=s=>{const [y,m,d]=s.split('-').map(Number);return new Date(y,m-1,d)};
@@ -167,8 +171,10 @@ function render(){
     const m=document.createElement('div');m.className='m';m.textContent=i.cat+(e?' · SKT: '+fmt(e):'')+(i.by?' · '+i.by:'');
     const t=document.createElement('div');t.className='tag';t.textContent=s.t;
     l.append(n,m,t);
-    if(s.k==='none'){const inp=document.createElement('input');inp.type='date';inp.className='inl';inp.title='SKT gir';
-      inp.onchange=async()=>{if(inp.value)try{await updateDoc(doc(db,'items',i.id),{skt:inp.value})}catch(x){err(x)}};l.appendChild(inp)}
+    const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;margin-top:4px';
+    if(s.k==='none'){const inp=document.createElement('input');inp.type='date';inp.className='inl';inp.title='SKT gir';inp.style.marginTop='0';
+      inp.onchange=async()=>{if(inp.value)try{await updateDoc(doc(db,'items',i.id),{skt:inp.value})}catch(x){err(x)}};row.appendChild(inp)}
+    const cam=document.createElement('button');cam.type='button';cam.className='s';cam.textContent='📷 SKT çek';cam.onclick=()=>itemPhoto(i);row.appendChild(cam);l.appendChild(row);
     const a=document.createElement('div');a.className='acts';
     const mk=(x,fn,c)=>{const b=document.createElement('button');b.className='s '+(c||'');b.textContent=x;b.onclick=fn;return b};
     a.append(mk('Düzenle',()=>startEdit(i)),mk('Sil',()=>del(i),'d'),mk('Kullanıldı',()=>retire(i,'kullanıldı')),mk('Fire',()=>retire(i,'fire')));
@@ -299,6 +305,32 @@ $('photoIn').onchange=async ev=>{
     $('bc').textContent='Okunamadı: '+(e.message||e.code||e)+' (Firebase\'de AI Logic açık mı?)';
   }finally{b.disabled=false}
 };
+
+// ---- Ürünün yanındaki kamera: SKT doğrudan o ürüne yazılır ----
+function toast(msg,undo,ms=9000){const t=$('toast');t.textContent='';const sp=document.createElement('span');sp.textContent=msg;t.appendChild(sp);
+  if(undo){const u=document.createElement('button');u.type='button';u.textContent='↩ Geri al';
+    u.onclick=async()=>{try{await undo();toast('Geri alındı.')}catch(e){err(e)}};t.appendChild(u)}
+  t.style.display='flex';clearTimeout(toastT);toastT=setTimeout(()=>{t.style.display='none'},ms)}
+const EXP_PROMPT=`Bu fotoğrafta bir ürünün (şişe, kutu, paket) üzerinde tarih yazıyor olabilir. SADECE JSON döndür:
+{"expiry":"son kullanma/tüketim tarihi (SKT, TETT, EXP, Best before, Use by) YYYY-MM-DD biçiminde, yoksa null","production":"üretim tarihi (PRD, ÜRT) YYYY-MM-DD, yoksa null"}
+Kurallar: Tarihler gün/ay/yıl sırasıdır (23/12/2028 = 2028-12-23). Sadece ay/yıl varsa ayın son gününü yaz. Üretim tarihini son kullanma tarihiyle karıştırma; sadece üretim tarihi varsa expiry null olsun. Okuyamadığını uydurma.`;
+async function askModel(prompt,data){let last;
+  for(const m of MODELS){try{
+    const model=getGenerativeModel(ai,{model:m,generationConfig:{responseMimeType:'application/json'}});
+    const r=await model.generateContent([prompt,{inlineData:{data,mimeType:'image/jpeg'}}]);
+    return JSON.parse(r.response.text().replace(/```json|```/g,'').trim())}catch(e){last=e}}
+  throw last}
+function itemPhoto(it){targetItem=it;$('itemPhotoIn').click()}
+$('itemPhotoIn').onchange=async ev=>{
+  const f=ev.target.files[0];ev.target.value='';const it=targetItem;targetItem=null;if(!f||!it)return;
+  toast('⏳ '+it.name+': tarih okunuyor…',null,60000);
+  try{
+    const out=await askModel(EXP_PROMPT,await toJpeg(f));
+    if(!okDate(out.expiry)){toast('⚠ '+it.name+': SKT okunamadı. Tarihin yazılı yerini daha net çekin veya elle girin.',null,10000);return}
+    const old=it.skt||'';
+    await updateDoc(doc(db,'items',it.id),{skt:out.expiry});
+    toast('✅ '+it.name+' · SKT: '+fmt(pd(out.expiry)),()=>updateDoc(doc(db,'items',it.id),{skt:old}),10000);
+  }catch(e){toast('Okunamadı: '+(e.message||e.code||e),null,12000)}};
 
 // ---- Giriş ----
 const prov=new GoogleAuthProvider();
