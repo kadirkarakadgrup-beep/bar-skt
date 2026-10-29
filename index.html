@@ -38,6 +38,9 @@ details summary{cursor:pointer;font-weight:600}
 #scan{position:fixed;inset:0;background:#000;z-index:9;display:none;flex-direction:column;padding:16px;gap:12px;color:#fff}
 #reader{flex:1;min-height:0}
 #bc{font-size:13px;color:var(--mute)}
+.item.none{border-left-color:var(--mute)}.none .tag{color:var(--mute)}
+input.inl{width:auto;padding:4px 6px;font-size:13px;margin-top:4px}
+.sum small{font-size:12px}#bc{font-size:13px;color:var(--mute)}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -59,6 +62,7 @@ details summary{cursor:pointer;font-weight:600}
   <div><b id="cBad" style="color:var(--bad)">0</b><small>Geçti/Bugün</small></div>
   <div><b id="cWarn" style="color:var(--warn)">0</b><small>3 gün içinde</small></div>
   <div><b id="cOk" style="color:var(--ok)">0</b><small>Güvenli</small></div>
+  <div><b id="cNone" style="color:var(--mute)">0</b><small>SKT yok</small></div>
 </div>
 <form id="f">
   <b id="ft">Yeni ürün ekle</b>
@@ -71,10 +75,6 @@ details summary{cursor:pointer;font-weight:600}
     <div><label>Grup</label><select id="cat"></select></div>
     <div><label>Adet</label><input id="qty" type="number" min="1" value="1"></div>
   </div>
-  <div class="row">
-    <div><label>Açılış tarihi (ops.)</label><input id="opened" type="date"></div>
-    <div><label>Kullanım süresi (gün, ops.)</label><input id="life" type="number" min="1"></div>
-  </div>
   <div><label>SKT (son kullanma tarihi)</label><input id="skt" type="date"></div>
   <div class="row"><button class="p" type="submit" id="sub">Ekle</button><button type="button" id="cancel" style="display:none">Vazgeç</button></div>
 </form>
@@ -82,7 +82,8 @@ details summary{cursor:pointer;font-weight:600}
   <div class="row3"><input id="gname" placeholder="Yeni grup adı"><button type="button" class="s p" id="gadd">Ekle</button></div>
   <div class="chips" id="chips"></div>
 </details>
-<details class="box" id="staffBox" style="display:none"><summary>Personeli yönet (yönetici)</summary>
+<details class="box" id="staffBox" style="display:none"><summary>Yönetim (yönetici)</summary>
+  <button type="button" class="s" id="imp">📥 Sayım listesindeki bar ürünlerini içe aktar (209)</button>
   <input id="sn" placeholder="Personel adı (örn. Ahmet Y.)">
   <input id="su" placeholder="Kullanıcı adı (küçük harf/rakam, örn. ahmet)" autocapitalize="none">
   <input id="sp" type="text" placeholder="Şifre (en az 6 karakter)">
@@ -90,9 +91,10 @@ details summary{cursor:pointer;font-weight:600}
   <div id="slist"></div>
 </details>
 <div class="row" style="margin-bottom:10px">
-  <select id="filter"><option value="all">Tüm durumlar</option><option value="bad">Geçti/Bugün</option><option value="warn">3 gün içinde</option></select>
+  <select id="filter"><option value="all">Tüm durumlar</option><option value="bad">Geçti/Bugün</option><option value="warn">3 gün içinde</option><option value="none">SKT girilmemiş</option></select>
   <select id="gfilter"></select>
 </div>
+<input id="q" placeholder="🔍 Ürün ara" style="margin-bottom:10px">
 <div id="list"></div>
 </div>
 
@@ -112,12 +114,13 @@ const FIREBASE_CONFIG = {
 import {initializeApp} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
 import {getAuth,createUserWithEmailAndPassword,signInWithEmailAndPassword,GoogleAuthProvider,signInWithPopup,signInWithRedirect,onAuthStateChanged,signOut} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
 import {getAI,getGenerativeModel,GoogleAIBackend} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-ai.js";
-import {getFirestore,collection,doc,addDoc,setDoc,getDoc,updateDoc,deleteDoc,onSnapshot} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
+import {getFirestore,writeBatch,collection,doc,addDoc,setDoc,getDoc,updateDoc,deleteDoc,onSnapshot} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
 
 const $=id=>document.getElementById(id);
 const fb=initializeApp(FIREBASE_CONFIG),auth=getAuth(fb),db=getFirestore(fb),ai=getAI(fb,{backend:new GoogleAIBackend()});
-const DEFAULT_GROUPS=['Şurup','Süt/Krema','Meyve/Sebze','Açılmış şişe','Fıçı bira','Diğer'];
+const DEFAULT_GROUPS=['Bira','Şarap','Rakı','Sert İçki','Likör & Vermut','Easymix','Şurup','Püre','Çay & Kahve','Alkolsüz İçecek','Süt/Krema','Meyve/Sebze','Açılmış şişe','Fıçı bira','Diğer'];
 const DOMAIN='@bar-skt.app';let isAdmin=false,staffName='',staffList=[];
+let photoMatch=null;
 let items=[],groups=[],logs=[],me=null,editId=null,barcode='',unsubs=[],scanner=null;
 const DAY=864e5,today=()=>{const d=new Date();d.setHours(0,0,0,0);return d};
 const pd=s=>{const [y,m,d]=s.split('-').map(Number);return new Date(y,m-1,d)};
@@ -126,15 +129,14 @@ const who=()=>staffName||(me?(me.displayName||me.email||''):'');
 const err=e=>{$('st').textContent=e.code==='permission-denied'?'Bu hesabın yetkisi yok (e-posta kurallarda ekli mi?)':'Hata: '+(e.message||e.code)};
 const allGroups=()=>[...DEFAULT_GROUPS,...groups.map(g=>g.name).filter(n=>!DEFAULT_GROUPS.includes(n))];
 
-function effDate(it){const c=[];if(it.skt)c.push(pd(it.skt));
-  if(it.opened&&it.life){const d=pd(it.opened);d.setDate(d.getDate()+Number(it.life));c.push(d)}
-  return c.length?new Date(Math.min(...c)):null}
-function status(it){const e=effDate(it);if(!e)return{k:'ok',t:'Tarih yok',d:9999};
+function effDate(it){return it.skt?pd(it.skt):null}
+function status(it){const e=effDate(it);if(!e)return{k:'none',t:'SKT girilmedi',d:99998};
   const d=Math.round((e-today())/DAY);
   if(d<0)return{k:'bad',t:Math.abs(d)+' gün geçti',d};
   if(d===0)return{k:'bad',t:'BUGÜN',d};
   if(d<=3)return{k:'warn',t:d+' gün kaldı',d};
   return{k:'ok',t:d+' gün kaldı',d}}
+const norm=s=>String(s||'').toLocaleLowerCase('tr').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/ı/g,'i');
 
 function fillGroups(){
   const g=allGroups(),cur=$('cat').value,gf=$('gfilter').value||'all';
@@ -151,30 +153,31 @@ function fillGroups(){
     c.appendChild(x);C.appendChild(c)});
 }
 function render(){
-  const rows=items.map(i=>({i,s:status(i)})).sort((a,b)=>a.s.d-b.s.d);
-  $('cBad').textContent=rows.filter(r=>r.s.k==='bad').length;
-  $('cWarn').textContent=rows.filter(r=>r.s.k==='warn').length;
-  $('cOk').textContent=rows.filter(r=>r.s.k==='ok').length;
-  const f=$('filter').value,gf=$('gfilter').value||'all';
-  const v=rows.filter(r=>(f==='all'||r.s.k===f)&&(gf==='all'||r.i.cat===gf));
+  const rows=items.map(i=>({i,s:status(i)})).sort((a,b)=>a.s.d-b.s.d||String(a.i.name).localeCompare(String(b.i.name),'tr'));
+  const cnt=k=>rows.filter(r=>r.s.k===k).length;
+  $('cBad').textContent=cnt('bad');$('cWarn').textContent=cnt('warn');$('cOk').textContent=cnt('ok');$('cNone').textContent=cnt('none');
+  const f=$('filter').value,gf=$('gfilter').value||'all',q=norm($('q').value.trim());
+  const v=rows.filter(r=>(f==='all'||r.s.k===f)&&(gf==='all'||r.i.cat===gf)&&(!q||norm(r.i.name).includes(q)));
   const L=$('list');L.textContent='';
   if(!v.length){const e=document.createElement('div');e.className='empty';e.textContent='Kayıt yok.';L.appendChild(e);return}
   v.forEach(({i,s})=>{
     const e=effDate(i),el=document.createElement('div');el.className='item '+s.k;
     const l=document.createElement('div');
-    const n=document.createElement('div');n.className='n';n.textContent=i.name+' ×'+i.qty;
+    const n=document.createElement('div');n.className='n';n.textContent=i.name+(i.qty>1?' ×'+i.qty:'');
     const m=document.createElement('div');m.className='m';m.textContent=i.cat+(e?' · SKT: '+fmt(e):'')+(i.by?' · '+i.by:'');
     const t=document.createElement('div');t.className='tag';t.textContent=s.t;
     l.append(n,m,t);
+    if(s.k==='none'){const inp=document.createElement('input');inp.type='date';inp.className='inl';inp.title='SKT gir';
+      inp.onchange=async()=>{if(inp.value)try{await updateDoc(doc(db,'items',i.id),{skt:inp.value})}catch(x){err(x)}};l.appendChild(inp)}
     const a=document.createElement('div');a.className='acts';
     const mk=(x,fn,c)=>{const b=document.createElement('button');b.className='s '+(c||'');b.textContent=x;b.onclick=fn;return b};
     a.append(mk('Düzenle',()=>startEdit(i)),mk('Sil',()=>del(i),'d'),mk('Kullanıldı',()=>retire(i,'kullanıldı')),mk('Fire',()=>retire(i,'fire')));
     el.append(l,a);L.appendChild(el)});
 }
 function startEdit(i){editId=i.id;barcode=i.barcode||'';$('bc').textContent=barcode?'Barkod: '+barcode:'';
-  $('name').value=i.name;$('cat').value=i.cat;$('qty').value=i.qty;$('opened').value=i.opened||'';$('life').value=i.life||'';$('skt').value=i.skt||'';
+  $('name').value=i.name;$('cat').value=i.cat;$('qty').value=i.qty;$('skt').value=i.skt||'';
   $('ft').textContent='Ürünü düzenle';$('sub').textContent='Güncelle';$('cancel').style.display='';$('f').scrollIntoView({behavior:'smooth'})}
-function resetForm(){editId=null;barcode='';$('bc').textContent='';$('f').reset();$('qty').value=1;
+function resetForm(){editId=null;photoMatch=null;barcode='';$('bc').textContent='';$('f').reset();$('qty').value=1;
   $('ft').textContent='Yeni ürün ekle';$('sub').textContent='Ekle';$('cancel').style.display='none'}
 $('cancel').onclick=resetForm;
 async function del(it){if(!confirm('"'+it.name+'" tamamen silinsin mi? (Kayıt tutulmaz)'))return;
@@ -185,7 +188,7 @@ async function retire(it,reason){
     await deleteDoc(doc(db,'items',it.id));if(editId===it.id)resetForm()}catch(e){err(e)}}
 $('f').onsubmit=async ev=>{ev.preventDefault();
   const rec={name:$('name').value.trim(),cat:$('cat').value,qty:Number($('qty').value)||1,
-    opened:$('opened').value||'',life:$('life').value||'',skt:$('skt').value||'',barcode};
+    skt:$('skt').value||'',barcode};
   try{
     if(editId)await updateDoc(doc(db,'items',editId),rec);
     else await addDoc(collection(db,'items'),{...rec,added:Date.now(),by:who()});
@@ -197,13 +200,13 @@ $('gadd').onclick=async()=>{const n=$('gname').value.trim();if(!n)return;
   try{await addDoc(collection(db,'groups'),{name:n});$('gname').value=''}catch(e){err(e)}};
 $('xl').onclick=()=>{
   const rows=items.map(i=>({i,s:status(i)})).sort((a,b)=>a.s.d-b.s.d).map(({i,s})=>{const e=effDate(i);
-    return{'Ürün':i.name,'Grup':i.cat,'Adet':i.qty,'Barkod':i.barcode||'','Açılış Tarihi':i.opened||'','Kullanım Süresi (gün)':i.life||'','SKT':i.skt||'','Geçerli Son Tarih':e?fmt(e):'','Durum':s.t,'Ekleyen':i.by||''}});
+    return{'Kod':i.code||'','Ürün':i.name,'Grup':i.cat,'Adet':i.qty,'Barkod':i.barcode||'','SKT':e?fmt(e):'','Durum':s.t,'Ekleyen':i.by||''}});
   const lg=[...logs].sort((a,b)=>b.at-a.at).map(l=>({'Tarih':new Date(l.at).toLocaleString('tr-TR'),'Ürün':l.name,'Grup':l.cat,'Adet':l.qty,'Neden':l.reason,'İşlemi yapan':l.by||''}));
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'Ürünler');
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(lg),'Kullanım-Fire Kayıtları');
   XLSX.writeFile(wb,'skt-takip-'+new Date().toISOString().slice(0,10)+'.xlsx')};
-$('filter').onchange=render;$('gfilter').onchange=render;
+$('q').oninput=render;$('filter').onchange=render;$('gfilter').onchange=render;
 
 // ---- Barkod ----
 async function lookup(code){
@@ -227,20 +230,48 @@ $('scanBtn').onclick=async()=>{
   catch(e){await stopScan();alert('Kamera açılamadı. Tarayıcıda kamera iznini verin.')}};
 $('scanX').onclick=stopScan;
 
+// ---- Sayım listesinden içe aktarma ----
+const BAR_ITEMS=[["PR001","TOMMYS MARGARITA","Easymix","LT"],["PR002","EASYMIX MOSCOW MULE","Easymix","LT"],["PR003","EASYMIX PASSION MARTINI","Easymix","LT"],["PR004","EASYMIX W.S. SATSUMA","Easymix","LT"],["PR005","EASYMIX LIBIDO","Easymix","LT"],["PR006","EASYMIX TUXEDO","Easymix","LT"],["PR007","EASYMIX VAI VAI","Easymix","LT"],["PR008","EASYMIX PURPLE BASIL","Easymix","LT"],["PR009","EASYMIX CITRUS BLEND","Easymix","LT"],["PR010","EASYMIX WHITE PEACH","Easymix","LT"],["PR011","EASYMIX CRANBERRY HIBISCUS","Easymix","LT"],["PR012","EASYMIX GRASS","Easymix","LT"],["PR013","EASYMIX ROOIBOS PEACH","Easymix","LT"],["PR014","EASYMIX STRAWBERRY HIBISCUS","Easymix","LT"],["PR015","EASYMIX COOL LIME","Easymix","LT"],["PR016","EASYMIX RASPBERRY ACAI","Easymix","LT"],["PR017","EASYMIX WATERMELON","Easymix","LT"],["PR018","EASYMIX ORANGE MANGO","Easymix","LT"],["PR019","EASYMIX VARYASYON","Easymix","LT"],["PR020","EASYMIX MASTICHA TINCTURE","Easymix","LT"],["PR021","EASYMIX ELDERFLOWER TINCTURE","Easymix","LT"],["PR022","EASYMIX LIQUID SMOKE TINCTURE","Easymix","LT"],["PR023","EASYMIX VANILYA SURUBU","Easymix","LT"],["YA00005","SB SELECTION BEYAZ","Şarap","ADET"],["YA00006","SB SARTORI PINOT GRIGIO","Şarap","ADET"],["YA00008","SB PROSECCO","Şarap","ADET"],["YA00013","SB GATTO NEGRO CHARDNY","Şarap","ADET"],["YA00014","SB CANKAYA 75 CL","Şarap","ADET"],["YA00015","SB CANKAYA 37 CL","Şarap","ADET"],["YA00016","SB ANGORA BEYAZ 75CL","Şarap","ADET"],["YA00017","SB ANGORA BEYAZ 37 CL","Şarap","ADET"],["YA00018","SB ANCYRA SAUVIGNON BLANC","Şarap","ADET"],["YA00019","SB ANCRYA NARINCE","Şarap","ADET"],["YA00040","MILLER","Bira","ADET"],["YA00042","HEINEKEN","Bira","ADET"],["YA00043","GUINNESS DRAUGHT","Bira","ADET"],["YA00045","ERDINGER","Bira","ADET"],["YA00046","EFES SISE 50 LIK","Bira","ADET"],["YA00048","EFES SISE 33 CL","Bira","ADET"],["YA00051","EFES PILSEN GREEN 50 CL","Bira","ADET"],["YA00053","EFES MALT 50 CL","Bira","ADET"],["YA00056","EFES FICI","Bira","LT"],["YA00061","EFES BELFAST 50 CL","Bira","ADET"],["YA00062","DUVEL","Bira","ADET"],["YA00063","CORONA 33,5 CL","Bira","ADET"],["YA00066","BOMONTI FILTRESIZ 50 CL","Bira","ADET"],["YA00068","BECKS","Bira","ADET"],["YA00070","AMSTERDAM","Bira","ADET"],["YA00079","VISKI JOHNIE WALKR BLACK 70 CL","Sert İçki","CL"],["YA00080","VISKI JOHNIE WALKER RED 70 CL","Sert İçki","CL"],["YA00081","VISKI JIM BEAM 70 CL","Sert İçki","CL"],["YA00082","VISKI J&B 70 CL","Sert İçki","CL"],["YA00083","VISKI JAMESON 70 CL","Sert İçki","CL"],["YA00085","VISKI JACK DANIELS 70 CL","Sert İçki","CL"],["YA00096","VISKI CHIVAS REGAL 12 YIL 70 CL","Sert İçki","CL"],["YA00097","VISKI BALLANTINES 70 CL","Sert İçki","CL"],["YA00099","CIN GORDON 70CL","Sert İçki","CL"],["YA00100","CIN TANQUERAY TEN 70CL","Sert İçki","CL"],["YA00102","CIN HENDRIKS 70CL","Sert İçki","CL"],["YA00104","CIN BEEFEATHER 70CL","Sert İçki","CL"],["YA00107","SK YAKUT 75 CL","Şarap","ADET"],["YA00108","SK YAKUT 37 CL","Şarap","ADET"],["YA00110","SK SELECTION KIRMIZI 75 CL","Şarap","ADET"],["YA00112","SK MONTES MERLOT","Şarap","ADET"],["YA00113","SK MONTES MALBEC","Şarap","ADET"],["YA00118","SK GATO NEGRO CAB. SAUV","Şarap","ADET"],["YA00119","SK EGEO BLEND","Şarap","ADET"],["YA00121","SK BORDEAUX BARON DE LSTC","Şarap","ADET"],["YA00122","SK ANGORA KIRMIZI 75 CL","Şarap","ADET"],["YA00123","SK ANGORA KIRMIZI 37 CL","Şarap","ADET"],["YA00124","SK ANCYRA OKUZGOZU","Şarap","ADET"],["YA00125","SK ANCYRA MERLOT","Şarap","ADET"],["YA00126","SK ANCYRA KALECIKKARASI","Şarap","ADET"],["YA00127","SK ANCYRA CAB. SAUV. SHIRAZ","Şarap","ADET"],["YA00128","SK ANCYRA BOGAZKERE","Şarap","ADET"],["YA00148","KONYAK HENNESY V.S.O.P 70CL","Sert İçki","CL"],["YA00149","KONYAK HENNESY V.S 70CL","Sert İçki","CL"],["YA00150","LIKOR YERLI (JEST PORTAKAL) 70 CL","Likör & Vermut","CL"],["YA00157","LIKOR SAFARI 70 CL","Likör & Vermut","CL"],["YA00161","LIKOR MALIBU 70 CL","Likör & Vermut","CL"],["YA00164","LIKOR KAHLUA 70 CL","Likör & Vermut","CL"],["YA00165","LIKOR JAGERMAISTER 70 CL","Likör & Vermut","CL"],["YA00168","LIKOR GARRONE TRIBLE SEC 70 CL","Likör & Vermut","CL"],["YA00170","LIKOR COINTREAU 70 CL","Likör & Vermut","CL"],["YA00172","LIKOR CARDINAL PEACH 70 CL","Likör & Vermut","CL"],["YA00173","LIKOR CARDINAL MELAON 70 CL","Likör & Vermut","CL"],["YA00174","LIKOR CAMPARI 70 CL","Likör & Vermut","CL"],["YA00178","LIKOR BAILEYS 70 CL","Likör & Vermut","CL"],["YA00179","LIKOR ARCHERS 70 CL","Likör & Vermut","CL"],["YA00180","LIKOR APEROL 70 CL","Likör & Vermut","CL"],["YA00184","LIKOR AMARETTO 70 CL","Likör & Vermut","CL"],["YA00187","RAKI YENI RAKI YENI SERI 70 CL","Rakı","ADET"],["YA00193","RAKI TEKIRDAG RAKI 35 CL","Rakı","ADET"],["YA00194","RAKI TEKIRDAG 70 CL","Rakı","ADET"],["YA00197","ROM CAPTAIN MORGAN 70CL","Sert İçki","CL"],["YA00200","ROM BACARDI 70CL","Sert İçki","CL"],["YA00202","SR SULTANIYE","Şarap","ADET"],["YA00204","SR ROSATO","Şarap","ADET"],["YA00205","SR MONCIGALE BY BLASH","Şarap","ADET"],["YA00206","SR LAL","Şarap","ADET"],["YA00207","SR GATO NEGRO ROSE","Şarap","ADET"],["YA00208","SR ANCYRA BLUSH","Şarap","ADET"],["YA00209","SR SERENA PROSECCO FRIZZANTE TREV","Şarap","ADET"],["YA00218","TEKILA OLMECA SILVER 70 CL","Sert İçki","CL"],["YA00219","TEKILA OLMECA GOLD 70 CL","Sert İçki","CL"],["YA00223","TEKILA JOSE CUERVO 70 CL","Sert İçki","CL"],["YA00225","VERMUT ROSSO","Likör & Vermut","CL"],["YA00228","VERMUT DRY","Likör & Vermut","CL"],["YA00229","VERMUT BIANCO","Likör & Vermut","CL"],["YA00235","VOTKA ABSOLUT VANILYA 70CL","Sert İçki","CL"],["YA00237","VOTKA ABSOLUT CITRON 70CL","Sert İçki","CL"],["YA00238","VOTKA ABSOLUT 70CL","Sert İçki","CL"],["YA00240","VOTKA ABSOLUT MANDRIN 70CL","Sert İçki","CL"],["YA00241","VOTKA ABSOLUT PEACH 70CL","Sert İçki","CL"],["YA00242","VOTKA SMIRNOFF 70CL","Sert İçki","CL"],["YA00248","EFES GLUTENSİZ 50 CL","Bira","ADET"],["YA00252","RAKI YENI RAKI 100CL","Rakı","CL"],["YA00253","VOTKA GILBEYS 70 CL","Sert İçki","CL"],["YA00254","CIN GILBEYS 70 CL","Sert İçki","CL"],["YA00257","EFES BUD 50 CL","Bira","ADET"],["YA00268","BIRA STELLA ARTOIS 44 CL","Bira","ADET"],["YI00006","BUBBLE TEA CILEK","Çay & Kahve","KG"],["YI00007","BUBBLE TEA ELMA","Çay & Kahve","KG"],["YI00008","BUBBLE TEA MANGO","Çay & Kahve","KG"],["YI00009","BUBBLE TEA YABAN MERSINI","Çay & Kahve","KG"],["YI00020","SURUP BLUE","Şurup","ADET"],["YI00021","SURUP CIKOLATA","Şurup","ADET"],["YI00022","SURUP CILEK","Şurup","ADET"],["YI00023","SURUP ELMA","Şurup","ADET"],["YI00024","SURUP FALERNUM KOKTEYL","Şurup","LT"],["YI00025","SURUP FINDIK","Şurup","ADET"],["YI00027","SURUP GRANADINE","Şurup","ADET"],["YI00029","SURUP HINDISTAN","Şurup","ADET"],["YI00030","SURUP KARAMEL","Şurup","ADET"],["YI00031","SURUP KARPUZ","Şurup","ADET"],["YI00032","SURUP KAVUN","Şurup","ADET"],["YI00033","SURUP KIWI","Şurup","ADET"],["YI00036","SURUP LIME","Şurup","ADET"],["YI00039","SURUP MUZ","Şurup","ADET"],["YI00040","SURUP MURVER CICEGI","Şurup","ADET"],["YI00041","SURUP NANE","Şurup","ADET"],["YI00045","SURUP VANILYA","Şurup","ADET"],["YI00047","SURUP ZENCEFIL","Şurup","ADET"],["YI00050","CAY CHAI TEA LATTE","Çay & Kahve","KG"],["YI00051","CAY CILEK","Çay & Kahve","KG"],["YI00052","CAY DEMLIK POSET","Çay & Kahve","KG"],["YI00053","CAY EARLY GREY 250GR AMBALAJ","Çay & Kahve","KG"],["YI00054","CAY ELMA & TARCIN 250GR AMBALAJ","Çay & Kahve","KG"],["YI00055","CAY HUBISCUS 250GR AMBALAJ","Çay & Kahve","KG"],["YI00056","CAY KARAMEL 250GR AMBALAJ","Çay & Kahve","KG"],["YI00057","CAY KIRMIZI ORMAN MYV. 250GR AMBALAJ","Çay & Kahve","KG"],["YI00058","CAY KUSBURNU 250GR AMBALAJ","Çay & Kahve","KG"],["YI00060","CAY MAVI KELEBEK","Çay & Kahve","KG"],["YI00065","CAY YESIL 250GR AMBALAJ","Çay & Kahve","KG"],["YI00066","FRENCH VANILYA 250GR AMBALAJ","Çay & Kahve","KG"],["YI00067","HAZELNUT 250GR AMBALAJ","Çay & Kahve","KG"],["YI00068","IHLAMUR 250GR AMBALAJ","Çay & Kahve","KG"],["YI00069","IRIS CREAM 250GR AMBALAJ","Çay & Kahve","KG"],["YI00070","KAHVE CEKIRDEK","Çay & Kahve","KG"],["YI00071","KAHVE FILTRE","Çay & Kahve","ADET"],["YI00072","KAHVE NESCAFE  GOLD 900 GR","Çay & Kahve","KG"],["YI00074","SAHLEP","Çay & Kahve","KG"],["YI00075","SICAK CIKOLATA","Çay & Kahve","KG"],["YI00077","TURK KAHVE","Çay & Kahve","KG"],["YI00078","TURK KAHVE D.SAKIZLI","Çay & Kahve","KG"],["YI00079","ADA ÇAYI 250GR AMBALAJ","Çay & Kahve","KG"],["YI00080","AYRAN KUTU","Alkolsüz İçecek","ADET"],["YI00085","COCA COLA 1 LT PET","Alkolsüz İçecek","ADET"],["YI00088","COLA LIGHT SISE","Alkolsüz İçecek","ADET"],["YI00089","COLA SISE","Alkolsüz İçecek","ADET"],["YI00090","COLA ZERO SISE","Alkolsüz İçecek","ADET"],["YI00094","DAMACANA SU","Alkolsüz İçecek","ADET"],["YI00095","FANTA 1 LT PET","Alkolsüz İçecek","ADET"],["YI00096","FANTA SISE","Alkolsüz İçecek","ADET"],["YI00097","FUSTEA LIMON SISE","Alkolsüz İçecek","ADET"],["YI00098","FUSTEA SEFTALI SISE","Alkolsüz İçecek","ADET"],["YI00101","LIMONATA","Alkolsüz İçecek","LT"],["YI00102","MSU ANANAS 1 LT","Alkolsüz İçecek","LT"],["YI00103","MSU ELMA 1 LT","Alkolsüz İçecek","LT"],["YI00104","MSU KARISIK 1 LT","Alkolsüz İçecek","LT"],["YI00105","MSU KAYISI 1 LT","Alkolsüz İçecek","LT"],["YI00107","MSU PORTAKAL 1 LT","Alkolsüz İçecek","LT"],["YI00108","MSU SEFTALI 1 LT","Alkolsüz İçecek","LT"],["YI00109","MSU VISNE 1 LT","Alkolsüz İçecek","LT"],["YI00113","PIN YESIL CAY","Alkolsüz İçecek","ADET"],["YI00114","PORTAKAL SUYU TAZE","Alkolsüz İçecek","LT"],["YI00115","REDBULL","Alkolsüz İçecek","ADET"],["YI00116","REDBULL BLUE EDITION","Alkolsüz İçecek","ADET"],["YI00118","REDBULL SUGAR FREE","Alkolsüz İçecek","ADET"],["YI00119","REDBULL WHITE EDITION","Alkolsüz İçecek","ADET"],["YI00120","REDBULL YELLOW EDITION","Alkolsüz İçecek","ADET"],["YI00121","SCHWEPS LIMON SISE","Alkolsüz İçecek","ADET"],["YI00122","SCHWEPS MANDALINA SISE","Alkolsüz İçecek","ADET"],["YI00123","SODA ELMALI","Alkolsüz İçecek","ADET"],["YI00124","SODA LIMONLU","Alkolsüz İçecek","ADET"],["YI00127","SODA SADE","Alkolsüz İçecek","ADET"],["YI00129","SPRITE SISE","Alkolsüz İçecek","ADET"],["YI00130","SU CAM SISE 330 ML","Alkolsüz İçecek","ADET"],["YI00131","TONIK","Alkolsüz İçecek","ADET"],["YI00133","PURE KIRMIZI ORMAN MEYVELI","Püre","KG"],["YI00134","PURE MANGO","Püre","KG"],["YI00135","PURE PASSION FRUIT (CARKIFELEK)","Püre","KG"],["YI00136","PURE SATSUMA(MANDALINA BODRUM)","Püre","KG"],["YI00137","PURE SEFTALI","Püre","KG"],["YI00140","PURE YESIL ELMA","Püre","KG"],["YI00159","SODA PREMIUM DAMLA 330 ML","Alkolsüz İçecek","ADET"],["YI00161","LIKOR TRIPLE SEC","Likör & Vermut","CL"],["YI00162","SB SULTANIYE EMIR","Şarap","CL"],["YI00167","BURN","Alkolsüz İçecek","AD"]];
+$('imp').onclick=async()=>{
+  const codes=new Set(items.map(i=>i.code).filter(Boolean)),names=new Set(items.map(i=>norm(i.name)));
+  const todo=BAR_ITEMS.filter(r=>!codes.has(r[0])&&!names.has(norm(r[1])));
+  if(!todo.length){alert('Tüm ürünler zaten listede.');return}
+  if(!confirm(todo.length+' bar ürünü SKT\'siz olarak listeye eklensin mi? (Tarihleri sonra siz girersiniz.)'))return;
+  try{
+    for(let k=0;k<todo.length;k+=400){const b=writeBatch(db);
+      todo.slice(k,k+400).forEach(r=>b.set(doc(db,'items','imp_'+r[0]),{name:r[1],cat:r[2],qty:1,skt:'',opened:'',life:'',code:r[0],unit:r[3],barcode:'',added:Date.now(),by:'Sayım listesi'}));
+      await b.commit()}
+    alert(todo.length+' ürün eklendi.');
+  }catch(e){err(e);alert('Hata: '+(e.message||e.code))}};
+
 // ---- Fotoğraftan otomatik okuma (Gemini) ----
 const MODELS=['gemini-2.5-flash','gemini-flash-latest'];
 const promptText=()=>`Bu, bir bar/restoran malzemesinin (şişe, kutu, paket) etiket fotoğrafı. Etiketten şunları oku ve SADECE JSON döndür:
-{"name":"marka + ürün adı + hacim, örn. Fo Zencefil Aromalı Şurup 700 ml (yoksa null)",
+{"name":"marka + ürün adı + hacim (yoksa null)",
 "expiry":"son kullanma/tüketim tarihi (SKT, TETT, EXP, Best before) YYYY-MM-DD biçiminde (yoksa null)",
 "production":"üretim tarihi (PRD, ÜRT) YYYY-MM-DD (yoksa null)",
-"group":"şu listeden en uygunu: ${allGroups().join(', ')} (yoksa null)"}
-Kurallar: Tarihler gün/ay/yıl sırasıdır (23/12/2028 = 2028-12-23). Sadece ay/yıl varsa ayın son gününü yaz. Üretim tarihini son kullanma tarihiyle karıştırma. Okuyamadığın bir şeyi uydurma, null yaz. Ürün adını Türkçe etiket varsa Türkçe yaz.`;
+"group":"şu listeden en uygunu: ${allGroups().join(', ')} (yoksa null)",
+"match":"aşağıdaki MEVCUT ÜRÜN LİSTESİNDEN fotoğraftaki ürüne karşılık geleni listede yazdığı gibi AYNEN yaz; marka/çeşit/hacim açıkça uyuyorsa seç, emin değilsen null"}
+Kurallar: Tarihler gün/ay/yıl sırasıdır (23/12/2028 = 2028-12-23). Sadece ay/yıl varsa ayın son gününü yaz. Üretim tarihini son kullanma tarihiyle karıştırma. Okuyamadığın bir şeyi uydurma, null yaz.
+MEVCUT ÜRÜN LİSTESİ: ${items.map(i=>i.name).slice(0,700).join(' | ')}`;
 function toJpeg(file,max=1280){return new Promise((res,rej)=>{const img=new Image(),u=URL.createObjectURL(file);
   img.onload=()=>{const r=Math.min(1,max/Math.max(img.width,img.height)),c=document.createElement('canvas');
     c.width=Math.round(img.width*r);c.height=Math.round(img.height*r);c.getContext('2d').drawImage(img,0,0,c.width,c.height);
     URL.revokeObjectURL(u);res(c.toDataURL('image/jpeg',0.85).split(',')[1])};
   img.onerror=()=>rej(new Error('Fotoğraf açılamadı'));img.src=u})}
 const okDate=d=>typeof d==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(d)&&+d.slice(0,4)>=2000&&+d.slice(0,4)<=2100;
+function note(msg,undo){const b=$('bc');b.textContent=msg+' ';
+  if(undo){const u=document.createElement('button');u.type='button';u.className='s';u.textContent='↩ Geri al';
+    u.onclick=async()=>{try{await undo();b.textContent='Geri alındı.'}catch(e){err(e)}};b.appendChild(u)}}
+async function finalizePhoto(){
+  const name=$('name').value.trim(),skt=$('skt').value,m=photoMatch&&items.find(i=>i.id===photoMatch);
+  if(m){const old=m.skt||'';await updateDoc(doc(db,'items',m.id),{skt});resetForm();
+    note('✅ '+m.name+' · SKT: '+fmt(pd(skt))+(old?' (eski: '+fmt(pd(old))+')':''),()=>updateDoc(doc(db,'items',m.id),{skt:old}));return}
+  const rec={name,cat:$('cat').value,qty:Number($('qty').value)||1,skt,opened:'',life:'',barcode,added:Date.now(),by:who()};
+  const ref=await addDoc(collection(db,'items'),rec);resetForm();
+  note('✅ Yeni ürün eklendi: '+name+' · SKT: '+fmt(pd(skt)),()=>deleteDoc(ref));
+}
+$('name').addEventListener('input',()=>{photoMatch=null});
 $('photoBtn').onclick=()=>$('photoIn').click();
 $('photoIn').onchange=async ev=>{
   const f=ev.target.files[0];ev.target.value='';if(!f)return;
@@ -252,15 +283,18 @@ $('photoIn').onchange=async ev=>{
       const r=await model.generateContent([promptText(),{inlineData:{data,mimeType:'image/jpeg'}}]);
       out=JSON.parse(r.response.text().replace(/```json|```/g,'').trim());break}catch(e){last=e}}
     if(!out)throw last;
-    if(out.name&&!$('name').value.trim())$('name').value=String(out.name).trim();
-    if(out.group&&allGroups().includes(out.group))$('cat').value=out.group;
+    if(out.match){const m=items.find(i=>norm(i.name)===norm(out.match));if(m)photoMatch=m.id}
+    const mi=photoMatch&&items.find(i=>i.id===photoMatch);
+    if(mi)$('name').value=mi.name;
+    else{if(out.name&&!$('name').value.trim())$('name').value=String(out.name).trim();
+      if(out.group&&allGroups().includes(out.group))$('cat').value=out.group}
     if(okDate(out.expiry))$('skt').value=out.expiry;
-    const got=[];
-    if($('name').value.trim())got.push('Ürün: '+$('name').value.trim());
-    if($('skt').value)got.push('SKT: '+fmt(pd($('skt').value)));
-    if(!$('skt').value)$('bc').textContent='⚠ '+(got.join(' · ')||'Okunamadı')+' · SKT bulunamadı: tarihin yazılı olduğu yüzü de fotoğraflayın veya elle girin.';
-    else if(!$('name').value.trim())$('bc').textContent='⚠ '+got.join(' · ')+' · Ürün adı bulunamadı: ön yüzü fotoğraflayın veya elle yazın.';
-    else $('bc').textContent='✅ '+got.join(' · ')+' — kontrol edip Ekle\'ye basın.';
+    const name=$('name').value.trim(),skt=$('skt').value;
+    if(editId)note('Alanlar dolduruldu, kontrol edip Güncelle\'ye basın.');
+    else if(skt&&(name||photoMatch))await finalizePhoto();
+    else if(skt)note('⚠ SKT okundu: '+fmt(pd(skt))+' · ürün adı bulunamadı: ön yüzü fotoğraflayın veya elle yazın.');
+    else if(name)note('⚠ '+(photoMatch?'Eşleşti: ':'Ürün: ')+name+' · SKT bulunamadı: tarihin yazılı olduğu yüzü fotoğraflayın veya elle girin.');
+    else note('⚠ Okunamadı, daha net/yakından çekin.');
   }catch(e){
     $('bc').textContent='Okunamadı: '+(e.message||e.code||e)+' (Firebase\'de AI Logic açık mı?)';
   }finally{b.disabled=false}
