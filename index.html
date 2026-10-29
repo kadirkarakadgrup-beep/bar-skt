@@ -260,7 +260,8 @@ $('imp').onclick=async()=>{
   }catch(e){err(e);alert('Hata: '+(e.message||e.code))}};
 
 // ---- Fotoğraftan otomatik okuma (Gemini) ----
-const MODELS=['gemini-3.8-flash','gemini-flash-latest'];
+// Ücretsiz günlük kota her model için ayrı: 3.8-flash ≈20/gün, flash-lite modelleri ≈500/gün. Biri dolunca sıradakine geçer.
+const MODELS=['gemini-3.8-flash','gemini-3.5-flash-lite','gemini-3.1-flash-lite'];
 const promptText=()=>`Bu, bir bar/restoran malzemesinin (şişe, kutu, paket) etiket fotoğrafı. Etiketten şunları oku ve SADECE JSON döndür:
 {"name":"marka + ürün adı + hacim (yoksa null)",
 "expiry":"son kullanma/tüketim tarihi (SKT, TETT, EXP, Best before) YYYY-MM-DD biçiminde (yoksa null)",
@@ -350,10 +351,11 @@ $('diag').onclick=async()=>{
   if(!appCheck)log('App Check başlatılamadı: '+appCheckErr);
   else try{await Promise.race([getAppCheckToken(appCheck,true),tmo(15000,'15 sn içinde token gelmedi')]);log('App Check: ✓ token alındı')}
   catch(e){log('App Check: ✗ '+(e.code||'')+' '+(e.message||e))}
-  try{const model=getGenerativeModel(ai,{model:MODELS[0]});
-    const r=await Promise.race([model.generateContent('Sadece "tamam" yaz.'),tmo(20000,'20 sn içinde yanıt gelmedi')]);
-    log('Gemini: ✓ '+r.response.text().trim().slice(0,40))}
-  catch(e){log('Gemini: ✗ '+(e.message||e))}
+  for(const m of MODELS){
+    try{const model=getGenerativeModel(ai,{model:m});
+      const r=await Promise.race([model.generateContent('Sadece "tamam" yaz.'),tmo(20000,'20 sn içinde yanıt gelmedi')]);
+      log(m+': ✓ '+r.response.text().trim().slice(0,30))}
+    catch(e){const t=String(e.message||e);log(m+': ✗ '+(/429|quota/i.test(t)?'günlük ücretsiz kota dolu':/404/.test(t)?'model bulunamadı':t.slice(0,120)))}}
   log('Bitti.')};
 
 // ---- Giriş ----
