@@ -264,7 +264,7 @@ const promptText=()=>`Bu, bir bar/restoran malzemesinin (şişe, kutu, paket) et
 "production":"üretim tarihi (PRD, ÜRT) YYYY-MM-DD (yoksa null)",
 "group":"şu listeden en uygunu: ${allGroups().join(', ')} (yoksa null)",
 "match":"aşağıdaki MEVCUT ÜRÜN LİSTESİNDEN fotoğraftaki ürüne karşılık geleni listede yazdığı gibi AYNEN yaz; marka/çeşit/hacim açıkça uyuyorsa seç, emin değilsen null"}
-Kurallar: Tarihler gün/ay/yıl sırasıdır (23/12/2028 = 2028-12-23). Sadece ay/yıl varsa ayın son gününü yaz. Üretim tarihini son kullanma tarihiyle karıştırma. Okuyamadığın bir şeyi uydurma, null yaz.
+Kurallar: Tarihler gün/ay/yıl sırasıdır (23/12/2028 = 2028-12-23). Bitişik 6 haneli GGAAYY biçimi de çok yaygındır: "170926 TETT:170327" demek üretim tarihi 17.09.2026, tavsiye edilen tüketim tarihi (TETT) 17.03.2027 demektir (170327 = 2027-03-17). TETT, SKT, EXP, Son Tüketim yazan tarih "expiry", ÜRT, PRD, Üretim yazan tarih "production" alanıdır. Sadece ay/yıl varsa ayın son gününü yaz. Üretim tarihini son kullanma tarihiyle karıştırma. Okuyamadığın bir şeyi uydurma, null yaz.
 MEVCUT ÜRÜN LİSTESİ: ${items.map(i=>i.name).slice(0,700).join(' | ')}`;
 function toJpeg(file,max=1280){return new Promise((res,rej)=>{const img=new Image(),u=URL.createObjectURL(file);
   img.onload=()=>{const r=Math.min(1,max/Math.max(img.width,img.height)),c=document.createElement('canvas');
@@ -319,11 +319,12 @@ function toast(msg,undo,ms=9000){const t=$('toast');t.textContent='';const sp=do
   t.style.display='flex';clearTimeout(toastT);toastT=setTimeout(()=>{t.style.display='none'},ms)}
 const EXP_PROMPT=`Bu fotoğrafta bir ürünün (şişe, kutu, paket) üzerinde tarih yazıyor olabilir. SADECE JSON döndür:
 {"expiry":"son kullanma/tüketim tarihi (SKT, TETT, EXP, Best before, Use by) YYYY-MM-DD biçiminde, yoksa null","production":"üretim tarihi (PRD, ÜRT) YYYY-MM-DD, yoksa null"}
-Kurallar: Tarihler gün/ay/yıl sırasıdır (23/12/2028 = 2028-12-23). Sadece ay/yıl varsa ayın son gününü yaz. Üretim tarihini son kullanma tarihiyle karıştırma; sadece üretim tarihi varsa expiry null olsun. Okuyamadığını uydurma.`;
+Kurallar: Tarihler gün/ay/yıl sırasıdır (23/12/2028 = 2028-12-23). Bitişik 6 haneli GGAAYY biçimi de çok yaygındır: "170926 TETT:170327" demek üretim tarihi 17.09.2026, tavsiye edilen tüketim tarihi (TETT) 17.03.2027 demektir (170327 = 2027-03-17). TETT, SKT, EXP, Son Tüketim yazan tarih "expiry", ÜRT, PRD, Üretim yazan tarih "production" alanıdır. Sadece ay/yıl varsa ayın son gününü yaz. Üretim tarihini son kullanma tarihiyle karıştırma; sadece üretim tarihi varsa expiry null olsun. Okuyamadığını uydurma.`;
 async function askModel(prompt,data){let last;
   for(const m of MODELS){try{
     const model=getGenerativeModel(ai,{model:m,generationConfig:{responseMimeType:'application/json'}});
-    const r=await model.generateContent([prompt,{inlineData:{data,mimeType:'image/jpeg'}}]);
+    const r=await Promise.race([model.generateContent([prompt,{inlineData:{data,mimeType:'image/jpeg'}}]),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('Zaman aşımı: yanıt gelmedi (App Check anahtarı tanıtıldı mı?)')),30000))]);
     return JSON.parse(r.response.text().replace(/```json|```/g,'').trim())}catch(e){last=e}}
   throw last}
 function itemPhoto(it){targetItem=it;$('itemPhotoIn').click()}
