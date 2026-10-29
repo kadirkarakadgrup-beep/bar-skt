@@ -260,7 +260,7 @@ $('imp').onclick=async()=>{
   }catch(e){err(e);alert('Hata: '+(e.message||e.code))}};
 
 // ---- Fotoğraftan otomatik okuma (Gemini) ----
-const MODELS=['gemini-2.5-flash','gemini-flash-latest'];
+const MODELS=['gemini-3.8-flash','gemini-flash-latest'];
 const promptText=()=>`Bu, bir bar/restoran malzemesinin (şişe, kutu, paket) etiket fotoğrafı. Etiketten şunları oku ve SADECE JSON döndür:
 {"name":"marka + ürün adı + hacim (yoksa null)",
 "expiry":"son kullanma/tüketim tarihi (SKT, TETT, EXP, Best before) YYYY-MM-DD biçiminde (yoksa null)",
