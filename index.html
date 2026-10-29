@@ -80,6 +80,8 @@ details.box summary::before{content:"▸ ";color:var(--p1)}details.box[open] sum
 #scan{position:fixed;inset:0;background:#000;z-index:9;display:none;flex-direction:column;padding:16px;gap:12px;color:#fff}
 #reader{flex:1;min-height:0}
 #bc{font-size:13px;color:var(--mute)}
+.hrow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--line)}
+.hrow .n{font-weight:700;font-size:14.5px}.hrow .m{font-size:12px;color:var(--mute)}
 #toast{position:fixed;left:12px;right:12px;bottom:max(14px,env(safe-area-inset-bottom));background:linear-gradient(135deg,#2a1a4a,#1a1030);color:#fff;border:1px solid rgba(255,255,255,.2);padding:13px 14px;border-radius:16px;z-index:20;display:none;font-size:14px;align-items:center;gap:10px;justify-content:space-between;box-shadow:0 10px 30px rgba(0,0,0,.5)}
 #toast button{width:auto;padding:7px 12px;font-size:13px;white-space:nowrap;border-radius:999px;background:linear-gradient(135deg,var(--p1),var(--p2));color:#fff;border:0}
 </style>
@@ -133,6 +135,11 @@ details.box summary::before{content:"▸ ";color:var(--p1)}details.box[open] sum
   <pre id="diagOut" style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--mute);margin:0"></pre>
   <div id="slist"></div>
 </details>
+<details class="box" id="histBox"><summary>🕘 Geçmiş: kullanılan / fire <span id="histN" style="color:var(--mute);font-weight:600"></span></summary>
+  <div class="row"><select id="hf"><option value="all">Hepsi</option><option value="kullanıldı">Kullanıldı</option><option value="fire">Fire</option></select><input id="hq" placeholder="🔍 Ara"></div>
+  <button type="button" class="s good" id="hall" style="display:none"></button>
+  <div id="hist"></div>
+</details>
 <div class="row" style="margin-bottom:10px">
   <select id="filter"><option value="all">Tüm durumlar</option><option value="bad">Geçti/Bugün</option><option value="warn">3 gün içinde</option><option value="ok">Güvenli</option><option value="none">SKT girilmemiş</option></select>
   <select id="gfilter"></select>
@@ -172,7 +179,7 @@ try{appCheck=initializeAppCheck(fb,{provider:new ReCaptchaEnterpriseProvider('de
 const auth=getAuth(fb),db=getFirestore(fb),ai=getAI(fb,{backend:new GoogleAIBackend()});
 const DEFAULT_GROUPS=['Bira','Şarap','Rakı','Sert İçki','Likör & Vermut','Easymix','Şurup','Püre','Çay & Kahve','Alkolsüz İçecek','Süt/Krema','Meyve/Sebze','Açılmış şişe','Fıçı bira','Diğer'];
 const DOMAIN='@bar-skt.app';let isAdmin=false,staffName='',staffList=[];
-let photoMatch=null,targetItem=null,toastT=null;
+let photoMatch=null,targetItem=null,targetMode='set',toastT=null;
 let items=[],groups=[],logs=[],me=null,editId=null,barcode='',unsubs=[],scanner=null;
 const DAY=864e5,today=()=>{const d=new Date();d.setHours(0,0,0,0);return d};
 const pd=s=>{const [y,m,d]=s.split('-').map(Number);return new Date(y,m-1,d)};
@@ -228,7 +235,7 @@ function render(){
     if(s.k==='none'){const inp=document.createElement('input');inp.type='date';inp.title='SKT gir';
       inp.onchange=async()=>{if(inp.value)try{await updateDoc(doc(db,'items',i.id),{skt:inp.value})}catch(x){err(x)}};
       const lab=document.createElement('label');lab.className='dp';lab.append('📅 SKT gir',inp);a.appendChild(lab)}
-    a.append(mk('📷 SKT çek',()=>itemPhoto(i),'cam'),mk('Düzenle',()=>startEdit(i)),mk('Kullanıldı',()=>retire(i,'kullanıldı'),'good'),mk('Fire',()=>retire(i,'fire'),'fire'),mk('Sil',()=>del(i),'d'));
+    a.append(mk('📷 SKT çek',()=>itemPhoto(i),'cam'),mk('➕ Yeni parti',()=>itemPhoto(i,'new')),mk('Düzenle',()=>startEdit(i)),mk('Kullanıldı',()=>retire(i,'kullanıldı'),'good'),mk('Fire',()=>retire(i,'fire'),'fire'),mk('Sil',()=>del(i),'d'));
     el.append(top,a);L.appendChild(el)});
   document.querySelectorAll('.sum [data-f]').forEach(t=>t.classList.toggle('on',$('filter').value===t.dataset.f));
 }
@@ -238,12 +245,61 @@ function startEdit(i){editId=i.id;barcode=i.barcode||'';$('bc').textContent=barc
 function resetForm(){editId=null;photoMatch=null;barcode='';$('bc').textContent='';$('f').reset();$('qty').value=1;
   $('ft').textContent='Yeni ürün ekle';$('sub').textContent='Ekle';$('cancel').style.display='none'}
 $('cancel').onclick=resetForm;
+const snap=it=>{const {id,...d}=it;return d};
 async function del(it){if(!confirm('"'+it.name+'" tamamen silinsin mi? (Kayıt tutulmaz)'))return;
-  try{await deleteDoc(doc(db,'items',it.id));if(editId===it.id)resetForm()}catch(e){err(e)}}
+  try{const d=snap(it);await deleteDoc(doc(db,'items',it.id));if(editId===it.id)resetForm();
+    toast('🗑 '+it.name+' silindi',()=>setDoc(doc(db,'items',it.id),d),12000)}catch(e){err(e)}}
 async function retire(it,reason){
   if(reason==='fire'&&!confirm('Fire (atık) olarak kaydedilsin mi?'))return;
-  try{await addDoc(collection(db,'log'),{name:it.name,cat:it.cat,qty:it.qty,reason,at:Date.now(),by:who()});
-    await deleteDoc(doc(db,'items',it.id));if(editId===it.id)resetForm()}catch(e){err(e)}}
+  const label=(reason==='fire'?'🔥 Fire: ':'✔ Kullanıldı: ')+it.name;
+  try{
+    if((it.qty||1)>1){ // birden fazla şişe: sadece 1 adet düşer, kart kalır
+      const q=it.qty;
+      const lref=await addDoc(collection(db,'log'),{name:it.name,cat:it.cat,qty:1,reason,at:Date.now(),by:who(),itemId:it.id,partial:true});
+      await updateDoc(doc(db,'items',it.id),{qty:q-1});
+      toast(label+' (1 adet, '+(q-1)+' kaldı)',async()=>{await updateDoc(doc(db,'items',it.id),{qty:q});await deleteDoc(lref)},12000);return}
+    const d=snap(it);
+    const lref=await addDoc(collection(db,'log'),{name:it.name,cat:it.cat,qty:it.qty,reason,at:Date.now(),by:who(),itemId:it.id,item:d});
+    await deleteDoc(doc(db,'items',it.id));if(editId===it.id)resetForm();
+    toast(label,async()=>{await setDoc(doc(db,'items',it.id),d);await deleteDoc(lref)},12000)}catch(e){err(e)}}
+// ---- Geçmiş: kullanılan / fire kayıtları ve geri getirme ----
+const logData=l=>l.item?{...l.item}:{name:l.name,cat:l.cat||'Diğer',qty:l.qty||1,skt:'',barcode:'',added:Date.now(),by:'Geri getirildi'};
+async function restoreLog(l,silent){
+  try{
+    if(l.partial){const cur=items.find(i=>i.id===l.itemId);
+      if(cur)await updateDoc(doc(db,'items',l.itemId),{qty:(cur.qty||1)+(l.qty||1)});
+      else await setDoc(doc(db,'items',l.itemId),{...logData(l),qty:l.qty||1})}
+    else if(l.itemId)await setDoc(doc(db,'items',l.itemId),logData(l));
+    else await addDoc(collection(db,'items'),logData(l));
+    await deleteDoc(doc(db,'log',l.id));if(!silent)toast('↩ Geri getirildi: '+l.name)}catch(e){err(e)}}
+function histFiltered(){const f=$('hf').value,q=norm($('hq').value.trim());
+  return [...logs].sort((a,b)=>b.at-a.at).filter(l=>(f==='all'||l.reason===f)&&(!q||norm(l.name).includes(q)))}
+function renderHist(){
+  const L=histFiltered(),H=$('hist');H.textContent='';
+  $('histN').textContent='('+logs.length+')';
+  $('hall').textContent='↩ Listelenen '+L.length+' kaydın hepsini geri getir';$('hall').style.display=L.length>1?'':'none';
+  if(!L.length){const e=document.createElement('div');e.className='m';e.style.color='var(--mute)';e.textContent='Kayıt yok.';H.appendChild(e);return}
+  L.slice(0,150).forEach(l=>{
+    const r=document.createElement('div');r.className='hrow';
+    const t=document.createElement('div');t.style.minWidth='0';
+    const n=document.createElement('div');n.className='n';n.textContent=l.name;
+    const m=document.createElement('div');m.className='m';
+    m.textContent=(l.reason||'')+' · '+new Date(l.at).toLocaleString('tr-TR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})+(l.partial?' · 1 adet':'')+(l.by?' · '+l.by:'');
+    t.append(n,m);
+    const b=document.createElement('button');b.type='button';b.className='s good';b.textContent='↩ Geri getir';b.onclick=()=>restoreLog(l);
+    r.append(t,b);H.appendChild(r)});
+  if(L.length>150){const e=document.createElement('div');e.className='m';e.style.color='var(--mute)';e.textContent='İlk 150 kayıt gösteriliyor, aramayla daraltın.';H.appendChild(e)}}
+$('hf').onchange=renderHist;$('hq').oninput=renderHist;
+$('hall').onclick=async()=>{
+  const L=histFiltered();if(!L.length)return;
+  if(!confirm(L.length+' kaydın hepsi listeye geri getirilsin mi?'))return;
+  try{const P=L.filter(l=>l.partial),N=L.filter(l=>!l.partial);
+    for(const l of P)await restoreLog(l,true);
+    for(let k=0;k<N.length;k+=200){const b=writeBatch(db);
+      N.slice(k,k+200).forEach(l=>{const ref=l.itemId?doc(db,'items',l.itemId):doc(collection(db,'items'));b.set(ref,logData(l));b.delete(doc(db,'log',l.id))});
+      await b.commit()}
+    toast('↩ '+L.length+' ürün geri getirildi')}catch(e){err(e)}};
+
 $('f').onsubmit=async ev=>{ev.preventDefault();
   const rec={name:$('name').value.trim(),cat:$('cat').value,qty:Number($('qty').value)||1,
     skt:$('skt').value||'',barcode};
@@ -375,13 +431,16 @@ async function askModel(prompt,data){let last;
       new Promise((_,rej)=>setTimeout(()=>rej(new Error('Zaman aşımı: yanıt gelmedi (App Check anahtarı tanıtıldı mı?)')),30000))]);
     return JSON.parse(r.response.text().replace(/```json|```/g,'').trim())}catch(e){last=e}}
   throw last}
-function itemPhoto(it){targetItem=it;$('itemPhotoIn').click()}
+function itemPhoto(it,mode){targetItem=it;targetMode=mode||'set';$('itemPhotoIn').click()}
 $('itemPhotoIn').onchange=async ev=>{
-  const f=ev.target.files[0];ev.target.value='';const it=targetItem;targetItem=null;if(!f||!it)return;
+  const f=ev.target.files[0];ev.target.value='';const it=targetItem,mode=targetMode;targetItem=null;targetMode='set';if(!f||!it)return;
   toast('⏳ '+it.name+': tarih okunuyor…',null,60000);
   try{
     const out=await askModel(EXP_PROMPT,await toJpeg(f));
     if(!okDate(out.expiry)){toast('⚠ '+it.name+': SKT okunamadı. Tarihin yazılı yerini daha net çekin veya elle girin.',null,10000);return}
+    if(mode==='new'){
+      const ref=await addDoc(collection(db,'items'),{name:it.name,cat:it.cat,qty:1,skt:out.expiry,code:it.code||'',unit:it.unit||'',barcode:it.barcode||'',added:Date.now(),by:who()});
+      toast('✅ Yeni parti eklendi: '+it.name+' · SKT: '+fmt(pd(out.expiry)),()=>deleteDoc(ref),10000);return}
     const old=it.skt||'';
     await updateDoc(doc(db,'items',it.id),{skt:out.expiry});
     toast('✅ '+it.name+' · SKT: '+fmt(pd(out.expiry)),()=>updateDoc(doc(db,'items',it.id),{skt:old}),10000);
@@ -448,7 +507,7 @@ onAuthStateChanged(auth,async u=>{
   if(!u)return;
   fillGroups();render();
   unsubs=[sub('items',a=>{items=a;$('st').textContent='Canlı · '+who()+(isAdmin?' (yönetici)':'');render()}),
-    sub('groups',a=>{groups=a;fillGroups();render()}),sub('log',a=>{logs=a})];
+    sub('groups',a=>{groups=a;fillGroups();render()}),sub('log',a=>{logs=a;renderHist()})];
   if(isAdmin)unsubs.push(sub('staff',a=>{staffList=a;renderStaff()}));
 });
 </script>
