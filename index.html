@@ -117,11 +117,17 @@ const FIREBASE_CONFIG = {
 // ==========================================================================
 import {initializeApp} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
 import {getAuth,createUserWithEmailAndPassword,signInWithEmailAndPassword,GoogleAuthProvider,signInWithPopup,signInWithRedirect,onAuthStateChanged,signOut} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+import {initializeAppCheck,ReCaptchaEnterpriseProvider} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app-check.js";
 import {getAI,getGenerativeModel,GoogleAIBackend} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-ai.js";
 import {getFirestore,writeBatch,collection,doc,addDoc,setDoc,getDoc,updateDoc,deleteDoc,onSnapshot} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
 
 const $=id=>document.getElementById(id);
-const fb=initializeApp(FIREBASE_CONFIG),auth=getAuth(fb),db=getFirestore(fb),ai=getAI(fb,{backend:new GoogleAIBackend()});
+const fb=initializeApp(FIREBASE_CONFIG);
+// App Check (Firebase AI Logic için zorunlu). Bu anahtar Firebase > App Check > Apps > Manage debug tokens bölümüne eklenmelidir.
+const APPCHECK_DEBUG_TOKEN="62c27f1e-0f60-48b7-b076-902db9c50634";
+self.FIREBASE_APPCHECK_DEBUG_TOKEN=APPCHECK_DEBUG_TOKEN;
+try{initializeAppCheck(fb,{provider:new ReCaptchaEnterpriseProvider('debug-only'),isTokenAutoRefreshEnabled:true})}catch(e){console.warn('AppCheck',e)}
+const auth=getAuth(fb),db=getFirestore(fb),ai=getAI(fb,{backend:new GoogleAIBackend()});
 const DEFAULT_GROUPS=['Bira','Şarap','Rakı','Sert İçki','Likör & Vermut','Easymix','Şurup','Püre','Çay & Kahve','Alkolsüz İçecek','Süt/Krema','Meyve/Sebze','Açılmış şişe','Fıçı bira','Diğer'];
 const DOMAIN='@bar-skt.app';let isAdmin=false,staffName='',staffList=[];
 let photoMatch=null,targetItem=null,toastT=null;
